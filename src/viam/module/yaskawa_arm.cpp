@@ -49,6 +49,9 @@
 
 #include "utils.hpp"
 
+#include "model.hpp"
+#include "urdf_parser.hpp"
+
 // this chunk of code uses the rust FFI to handle the spatialmath calculations
 // to turn a UR vector to a pose
 extern "C" void* quaternion_from_euler_angles(double rx, double ry, double rz);
@@ -146,6 +149,12 @@ std::vector<std::string> validate_config_(const ResourceConfig& cfg) {
     auto telemetry_path = find_config_attribute<std::string>(cfg, "telemetry_output_path");
     if (telemetry_path && telemetry_path->empty()) {
         throw std::invalid_argument("attribute `telemetry_output_path` cannot be empty");
+    }
+
+    auto tcp_max_velocity = find_config_attribute<double>(cfg, "tcp_max_velocity_m_per_s");
+    if (tcp_max_velocity && *tcp_max_velocity <= 0.0) {
+        throw std::invalid_argument(
+            std::format("attribute `tcp_max_velocity_m_per_s` must be positive, got {}", *tcp_max_velocity));
     }
 
     auto group_index = find_config_attribute<double>(cfg, "group_index");
@@ -259,6 +268,16 @@ void YaskawaArm::configure_(const Dependencies&, const ResourceConfig& config) {
         std::string res = self->telemetry_output_path();
         return std::make_optional(res);
     });
+
+    // Load URDF and set up Jacobian model for TCP velocity limiting
+    const auto urdf_path = resource_root_ / "kinematics" / (model_.model_name() + ".urdf");
+    if (std::filesystem::exists(urdf_path)) {
+        auto jac_model = std::make_shared<jacobian::Model>(jacobian::parseURDF(urdf_path.string()));
+        robot_->set_jacobian_model(std::move(jac_model));
+        VIAM_SDK_LOG(info) << "TCP velocity limiting enabled from URDF: " << urdf_path;
+    } else {
+        VIAM_SDK_LOG(warn) << "URDF not found at " << urdf_path << "; TCP velocity limiting disabled";
+    }
 
     constexpr int k_max_connection_try = 5;
     int connection_try = 0;

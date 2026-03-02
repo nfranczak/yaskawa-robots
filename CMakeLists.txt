@@ -121,15 +121,18 @@ enable_testing()
 
 FetchContent_Declare(
   trajex
-  GIT_REPOSITORY https://github.com/viam-modules/universal-robots.git
-  GIT_TAG ac30d586ce03e6874534668a139324bb26c158b2
-  SOURCE_SUBDIR src/viam/trajex
+  SOURCE_DIR /home/nick/universal-robots/src/viam/trajex
 )
 
 find_package(xtl CONFIG REQUIRED)
 find_package(xtensor CONFIG REQUIRED)
 
-FetchContent_MakeAvailable(trajex)
+FetchContent_Declare(
+  jacobian
+  SOURCE_DIR /home/nick/universal-robots/third_party/jacobian
+)
+
+FetchContent_MakeAvailable(trajex jacobian)
 
 
 add_library(viam-yaskawa)
@@ -162,11 +165,13 @@ target_link_libraries(viam-yaskawa
     Boost::regex
     jsoncpp_lib
     viam-cpp-sdk::viamsdk
+    jacobian
 )
 
 install(
   TARGETS
     viam-yaskawa
+    jacobian
 )
 
 # If we have opted into more extensive warnings as errors, apply them now

@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <format>
 #include <future>
 #include <iostream>
@@ -59,6 +60,9 @@
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/types/hertz.hpp>
+
+#include "jacobian.hpp"
+#include "model.hpp"
 
 namespace {
 
@@ -823,6 +827,8 @@ YaskawaController::YaskawaController(boost::asio::io_context& io_context, const 
     segmentation_threshold_rad_ =
         find_config_attribute<double>(config, "segmentation_threshold_rad").value_or(k_default_segmentation_threshold);
 
+    tcp_max_velocity_m_per_s_ = find_config_attribute<double>(config, "tcp_max_velocity_m_per_s").value_or(1.2);
+
     tcp_socket_ = std::make_unique<TcpRobotSocket>(io_context_, host_);
     broadcast_listener_ = std::make_unique<UdpBroadcastListener>(io_context_);
 }
@@ -831,6 +837,10 @@ void YaskawaController::set_trajectory_loggers(std::string robot_model,
                                                std::optional<std::function<std::optional<std::string>()>> telemetry_path_fn) {
     robot_model_ = std::move(robot_model);
     telemetry_path_fn_ = std::move(telemetry_path_fn);
+}
+
+void YaskawaController::set_jacobian_model(std::shared_ptr<jacobian::Model> model) {
+    jac_model_ = std::move(model);
 }
 
 std::future<void> YaskawaController::connect() {
@@ -1278,6 +1288,26 @@ std::optional<MakeGoalResult> YaskawaController::make_goal_(std::list<Eigen::Vec
             std::ranges::copy(max_velocity_vec, trajex_opts.max_velocity.begin());
             std::ranges::copy(max_acceleration_vec, trajex_opts.max_acceleration.begin());
 
+            if (jac_model_) {
+                auto jac_data = std::make_shared<jacobian::Data>(*jac_model_);
+                trajex_opts.tcp = totg::trajectory::tcp_limit{
+                    .max_velocity = tcp_max_velocity_m_per_s_,
+                    .jacobian = [model = jac_model_, data = std::move(jac_data)](
+                                    const xt::xarray<double>& q) -> xt::xarray<double> {
+                        const auto n = static_cast<Eigen::Index>(q.size());
+                        const Eigen::Map<const Eigen::VectorXd> q_eigen(q.data(), n);
+                        jacobian::computeJacobian(*model, q_eigen, *data);
+                        xt::xarray<double> result = xt::zeros<double>({3u, static_cast<unsigned>(n)});
+                        for (Eigen::Index r = 0; r < 3; ++r) {
+                            for (Eigen::Index c = 0; c < n; ++c) {
+                                result(static_cast<std::size_t>(r), static_cast<std::size_t>(c)) = data->J(r, c);
+                            }
+                        }
+                        return result;
+                    },
+                };
+            }
+
             std::vector<trajectory_point_t> all_trajex_samples;
 
             const auto generation_start = std::chrono::steady_clock::now();
@@ -1365,6 +1395,38 @@ std::optional<MakeGoalResult> YaskawaController::make_goal_(std::list<Eigen::Vec
             LOGGING(info) << "trajex/totg trajectory generated successfully, total waypoints: " << total_waypoints
                           << ", total duration: " << total_duration << "s, total samples: " << all_trajex_samples.size()
                           << ", total arc length: " << total_arc_length << ", generation_time: " << generation_time << "s";
+
+            // Write TCP velocity profile CSV for diagnostics
+            if (jac_model_ && telemetry_path_fn_) {
+                if (auto telemetry_path = (*telemetry_path_fn_)()) {
+                    const auto csv_path = *telemetry_path + "/tcp_velocity_" + unix_time + ".csv";
+                    try {
+                        std::ofstream csv(csv_path);
+                        csv << "time_s,tcp_velocity_m_per_s\n";
+
+                        jacobian::Data jac_data(*jac_model_);
+                        for (const auto& pt : all_trajex_samples) {
+                            const auto n = static_cast<Eigen::Index>(jac_model_->revolute_joint_indices.size());
+                            Eigen::VectorXd q(n);
+                            Eigen::VectorXd qd(n);
+                            for (Eigen::Index i = 0; i < n; ++i) {
+                                q[i] = pt.positions[i];
+                                qd[i] = pt.velocities[i];
+                            }
+
+                            jacobian::computeJacobian(*jac_model_, q, jac_data);
+                            const Eigen::Vector3d tcp_vel = jac_data.J.topRows(3) * qd;
+
+                            const double time_s = static_cast<double>(pt.time_from_start.sec) +
+                                                  static_cast<double>(pt.time_from_start.nanos) * 1e-9;
+                            csv << time_s << "," << tcp_vel.norm() << "\n";
+                        }
+                        LOGGING(info) << "TCP velocity profile written to " << csv_path;
+                    } catch (const std::exception& e) {
+                        LOGGING(warning) << "Failed to write TCP velocity CSV: " << e.what();
+                    }
+                }
+            }
 
             return all_trajex_samples;
         } catch (const std::exception& e) {

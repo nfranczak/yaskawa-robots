@@ -36,6 +36,10 @@ extern "C" {
 #include "logger.hpp"
 #include "trajectory_logger.hpp"
 
+namespace jacobian {
+struct Model;
+}  // namespace jacobian
+
 template <typename T>
 [[nodiscard]] constexpr decltype(auto) degrees_to_radians(T&& degrees) {
     return std::forward<T>(degrees) * (M_PI / 180.0);
@@ -445,6 +449,7 @@ class YaskawaController : public std::enable_shared_from_this<YaskawaController>
     }
 
     void set_trajectory_loggers(std::string robot_model, std::optional<std::function<std::optional<std::string>()>> telemetry_path_fn);
+    void set_jacobian_model(std::shared_ptr<jacobian::Model> model);
 
    private:
     boost::asio::io_context& io_context_;
@@ -469,6 +474,9 @@ class YaskawaController : public std::enable_shared_from_this<YaskawaController>
     double segmentation_threshold_rad_;
     std::string robot_model_;
     std::optional<std::function<std::optional<std::string>()>> telemetry_path_fn_;
+
+    std::shared_ptr<jacobian::Model> jac_model_;
+    double tcp_max_velocity_m_per_s_{1.2};
 
     static bool is_status_command(message_type_t type);
     Message create_status_response_from_cache(message_type_t requested_type) const;
