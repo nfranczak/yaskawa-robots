@@ -403,7 +403,9 @@ std::string Message::get_error(message_type_t expected_type) const {
     if (header.message_type == MSG_ERROR) {
         error_payload_t err_msg;
         std::memcpy(&err_msg, payload.data(), sizeof(err_msg));
-        return std::format("received error code {}", static_cast<const int&>(err_msg.error_code));
+        // Ensure null-termination for safety
+        err_msg.message[sizeof(err_msg.message) - 1] = '\0';
+        return std::format("received error code {}: {}", static_cast<const int&>(err_msg.error_code), err_msg.message);
     }
 
     return std::format("unexpected message type expected {} got {}", static_cast<const int&>(expected_type), header.message_type);
@@ -1068,7 +1070,12 @@ GoalAcceptedMessage YaskawaController::send_goal_(uint32_t group_index,
     append_to(static_cast<uint32_t>(tolerance.size()));
     boost::for_each(tolerance, append_to);
 
-    return GoalAcceptedMessage(tcp_socket_->send_request(Message(MSG_MOVE_GOAL, std::move(payload))).get());
+    auto msg = tcp_socket_->send_request(Message(MSG_MOVE_GOAL, std::move(payload))).get();
+    const auto err = msg.get_error(MSG_GOAL_ACCEPTED);
+    if (!err.empty()) {
+        throw std::runtime_error(std::format("send goal failed: {}", err));
+    }
+    return GoalAcceptedMessage(msg);
 }
 
 std::unique_ptr<GoalRequestHandle> YaskawaController::move(std::list<Eigen::VectorXd> waypoints,
@@ -1116,7 +1123,9 @@ std::unique_ptr<GoalRequestHandle> YaskawaController::move(std::list<Eigen::Vect
     }
 
     const auto& accepted = goal_result->accepted;
-    LOGGING(debug) << "goal accepted: goal_id=" << accepted.goal_id;
+    LOGGING(debug) << "goal accepted: goal_id=" << accepted.goal_id
+                   << ", num_trajectory_accepted=" << accepted.num_trajectory_accepted
+                   << ", remaining=" << (goal_result->remaining_trajectory.size());
     if (logger.has_value()) {
         logger->set_goal_accepted_timestamp(accepted.timestamp_ms);
     }
@@ -1166,6 +1175,11 @@ std::unique_ptr<GoalRequestHandle> YaskawaController::move(std::list<Eigen::Vect
                 // TODO : change that with async
                 if (iteration++ % goal_status_polling_trigger == 0) {
                     const auto status_msg = shared->get_goal_status(goal_id);
+
+                    LOGGING(debug) << "goal_id=" << goal_id
+                                   << " state=" << goal_state_to_string(status_msg.state)
+                                   << " progress=" << status_msg.progress
+                                   << " queue=" << status_msg.current_queue_size;
 
                     switch (status_msg.state) {
                         case GOAL_STATE_ACTIVE:
@@ -1340,7 +1354,11 @@ std::optional<MakeGoalResult> YaskawaController::make_goal_(std::list<Eigen::Vec
                     auto sampler =
                         totg::uniform_sampler::quantized_for_trajectory(trajex_trajectory, types::hertz{trajectory_sampling_freq_});
 
-                    for (const auto& sample : trajex_trajectory.samples(sampler) | std::views::drop(1)) {
+                    // Drop the first sample for subsequent segments (it duplicates the
+                    // previous segment's last point), but keep it for the first segment
+                    // so the controller receives a t=0 starting point.
+                    const auto drop_count = all_trajex_samples.empty() ? 0 : 1;
+                    for (const auto& sample : trajex_trajectory.samples(sampler) | std::views::drop(drop_count)) {
                         const auto absolute_time = cumulative_time + std::chrono::duration<double>(sample.time.count());
                         auto secs = std::chrono::floor<std::chrono::seconds>(absolute_time);
                         auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(absolute_time - secs);
@@ -1366,7 +1384,9 @@ std::optional<MakeGoalResult> YaskawaController::make_goal_(std::list<Eigen::Vec
                     cumulative_time += std::chrono::duration<double>(trajex_trajectory.duration());
 
                     LOGGING(info) << "trajex/totg segment generated successfully, waypoints: " << segment.size()
-                                  << ", duration: " << trajex_trajectory.duration().count() << "s, samples: " << all_trajex_samples.size()
+                                  << ", duration: " << trajex_trajectory.duration().count() << "s"
+                                  << ", sampling_freq: " << trajectory_sampling_freq_ << "Hz"
+                                  << ", samples: " << all_trajex_samples.size()
                                   << ", arc length: " << trajex_trajectory.path().length();
                 } catch (...) {
                     const std::string error_msg = "failed to generate a new trajectory with trajex";
@@ -1431,7 +1451,7 @@ std::optional<MakeGoalResult> YaskawaController::make_goal_(std::list<Eigen::Vec
             return all_trajex_samples;
         } catch (const std::exception& e) {
             LOGGING(error) << "trajex/totg trajectory generation failed, waypoints: " << total_waypoints << ", exception: " << e.what();
-            return std::nullopt;
+            throw;
         }
     }();
 
