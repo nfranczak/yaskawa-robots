@@ -216,6 +216,23 @@ void RealtimeTrajectoryLogger::set_planned_trajectory(const std::vector<trajecto
     root_["planned_trajectory"] = trajectory_array_to_json(planned_trajectory_points, num_axes);
 }
 
+void RealtimeTrajectoryLogger::set_planner_options(double path_tolerance_delta_rads,
+                                                   std::optional<double> max_tcp_speed_m_per_sec,
+                                                   const std::optional<std::vector<std::vector<double>>>& model_table) {
+    root_["path_tolerance_delta_rads"] = path_tolerance_delta_rads;
+
+    // A TCP limit is reproducible only with both the cap and the model-table; record them together
+    // or not at all, matching the replay record's contract.
+    if (max_tcp_speed_m_per_sec && model_table) {
+        root_["max_tcp_speed_m_per_sec"] = *max_tcp_speed_m_per_sec;
+        Json::Value table(Json::arrayValue);
+        for (const auto& row : *model_table) {
+            table.append(vector_to_json(row));
+        }
+        root_["model_table"] = std::move(table);
+    }
+}
+
 RealtimeTrajectoryLogger::RealtimeTrajectoryLogger(RealtimeTrajectoryLogger&& other) noexcept
     : filepath_(std::move(other.filepath_)), root_(std::move(other.root_)), last_timestamp_(other.last_timestamp_) {
     other.root_ = Json::ValueType::nullValue;

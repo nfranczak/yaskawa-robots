@@ -8,6 +8,12 @@
 
 #include <Eigen/Core>
 #include <thread>
+
+#if __has_include(<xtensor/containers/xarray.hpp>)
+#include <xtensor/containers/xarray.hpp>
+#else
+#include <xtensor/xarray.hpp>
+#endif
 #include <viam/sdk/components/arm.hpp>
 #include <viam/sdk/config/resource.hpp>
 #include <viam/sdk/registry/registry.hpp>
@@ -119,6 +125,7 @@ class YaskawaArm final : public Arm, public std::enable_shared_from_this<Yaskawa
                                                          const std::string& unix_time,
                                                          const Eigen::VectorXd& max_velocity_vec,
                                                          const Eigen::VectorXd& max_acceleration_vec,
+                                                         std::optional<double> tcp_speed,
                                                          std::optional<RealtimeTrajectoryLogger>& logger);
 
     const Model model_;
@@ -128,9 +135,16 @@ class YaskawaArm final : public Arm, public std::enable_shared_from_this<Yaskawa
     uint32_t group_index_{0};
     Eigen::VectorXd velocity_limits_;
     Eigen::VectorXd acceleration_limits_;
+    std::optional<xt::xarray<double>> model_table_tensor_;  // (n,10) model table; nullopt if model has no URDF
     double trajectory_sampling_freq_{3.0};
     double waypoint_dedup_tolerance_rad_{1e-3};
     bool use_new_trajectory_planner_{true};
+    // When true, get_kinematics serves the model's URDF (KinematicsDataURDF); when false, the
+    // SVA JSON (KinematicsDataSVA). Defaults false to preserve the historical JSON behavior.
+    bool use_urdfs_{false};
+    // Default TCP speed cap (m/s) applied to every move when MoveOptions.max_tcp_speed is
+    // absent. A per-call MoveOptions.max_tcp_speed overrides this. nullopt if unconfigured.
+    std::optional<double> config_max_tcp_speed_;
     double path_tolerance_rad_{0.1};
     std::optional<double> collinearization_ratio_;
     double segmentation_threshold_rad_{0.005};

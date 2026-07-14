@@ -88,7 +88,7 @@ include(FetchContent)
 FetchContent_Declare(
   viam-cpp-sdk
   GIT_REPOSITORY https://github.com/viamrobotics/viam-cpp-sdk
-  GIT_TAG releases/v0.38.0 # Keep in sync with Dockerfile
+  GIT_TAG releases/v0.38.0 # Keep in sync with Dockerfile, bin/setup.sh, conanfile.py
   GIT_SHALLOW TRUE
   SYSTEM
   # Without this patch command, using this as a SYSTEM package results
@@ -131,7 +131,10 @@ enable_testing()
 FetchContent_Declare(
   trajex
   GIT_REPOSITORY https://github.com/viam-modules/trajex.git
-  GIT_TAG v0.100.0
+  # Pinned to the tip of viam-modules/trajex branch 20260601-RSDK-13338-TCP-Limit-Curve,
+  # which carries the TCP-limit work (make_tcp_jacobian, trajectory::tcp_limit). Not yet
+  # in a tagged release, so we pin the commit directly.
+  GIT_TAG 785ce36da8e39651ff35b0748dbc3877b0ab624e
 )
 
 find_package(xtl CONFIG REQUIRED)
@@ -263,6 +266,7 @@ target_sources(yaskawa-robots
   src/viam/module/main.cpp
   src/viam/module/utils.cpp
   src/viam/module/yaskawa_arm.cpp
+  src/viam/module/tcp_limit.cpp
 )
 
 # Tell boost::dll to use std::filesystem rather than boost::filesystem.
@@ -388,6 +392,53 @@ target_link_libraries(move_limit_test
 )
 
 add_test(NAME move_limit_test COMMAND move_limit_test)
+
+add_executable(tcp_limit_test EXCLUDE_FROM_ALL)
+
+target_sources(tcp_limit_test
+  PRIVATE
+    src/viam/module/test/tcp_limit_test.cpp
+    src/viam/module/tcp_limit.cpp
+)
+
+target_compile_definitions(tcp_limit_test
+  PRIVATE
+    YASKAWA_TEST_KINEMATICS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/kinematics"
+)
+
+target_link_libraries(tcp_limit_test
+  PRIVATE
+    viam-yaskawa
+    Boost::unit_test_framework
+    viam-cpp-sdk::viamsdk
+    viam::trajex::totg
+)
+
+add_test(NAME tcp_limit_test COMMAND tcp_limit_test)
+
+add_executable(tcp_limit_curve_test EXCLUDE_FROM_ALL)
+
+target_sources(tcp_limit_curve_test
+  PRIVATE
+    src/viam/module/test/tcp_limit_curve_test.cpp
+    src/viam/module/tcp_limit.cpp
+)
+
+target_compile_definitions(tcp_limit_curve_test
+  PRIVATE
+    YASKAWA_TEST_KINEMATICS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/kinematics"
+)
+
+target_link_libraries(tcp_limit_curve_test
+  PRIVATE
+    viam-yaskawa
+    Boost::unit_test_framework
+    viam-cpp-sdk::viamsdk
+    viam::trajex::totg
+    viam::trajex::totg::tools
+)
+
+add_test(NAME tcp_limit_curve_test COMMAND tcp_limit_curve_test)
 
 # Common sources and include dirs for integration tests that use the fake server
 set(INTEGRATION_TEST_SOURCES

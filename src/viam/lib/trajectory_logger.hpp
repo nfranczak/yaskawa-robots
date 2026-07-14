@@ -3,6 +3,7 @@
 #include <json/json.h>
 #include <Eigen/Core>
 #include <list>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,13 @@ class RealtimeTrajectoryLogger {
     void set_goal_accepted_timestamp(int64_t timestamp_ms);
     void set_waypoints(const std::list<Eigen::VectorXd>& waypoints_rad);
     void set_planned_trajectory(const std::vector<trajectory_point_t>& planned_trajectory_points, int num_axes = NUMBER_OF_DOF);
+
+    // Records the planner inputs needed to re-plan this move for visualization: the path blend
+    // tolerance, and (only when both are present) the TCP Cartesian speed cap and the (n, 10)
+    // model-table the TCP jacobian was built from.
+    void set_planner_options(double path_tolerance_delta_rads,
+                             std::optional<double> max_tcp_speed_m_per_sec,
+                             const std::optional<std::vector<std::vector<double>>>& model_table);
 
     void append_realtime_sample(const StatusMessage& status);
 
